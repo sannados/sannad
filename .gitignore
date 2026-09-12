@@ -1,0 +1,13 @@
+.env
+.env.local
+bin/
+dist/
+coverage/
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.exe
+.gocache/
+tmp/
+deploy/docker-compose/.env

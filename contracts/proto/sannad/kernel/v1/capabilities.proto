@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package sannad.kernel.v1;
+
+option go_package = "github.com/sannados/sannad/contracts/gen/go/sannad/kernel/v1;kernelV1";
+
+// The kernel's own contract, and deliberately the only one it owns.
+//
+// Every other proto in this repository belongs to a module. This one belongs to
+// the kernel because it is not about any domain: it is the generic dispatch that
+// makes ADR 0001's claim true for tier 3 — the same capability lives at any
+// tier, and callers cannot tell the difference.
+//
+// Without it a module gets a gRPC surface only if someone hand-writes a service
+// for it, which means a community module has no external API unless the kernel
+// team writes one. That is the coupling this removes.
+
+// CallRequest invokes one capability.
+message CallRequest {
+  // Reference of the capability to call, as "name@version".
+  //
+  // The version is required. A reference without one asks for "whatever you
+  // have", which is how an integration silently starts talking to v2 after an
+  // upgrade — exactly what versioned references exist to prevent.
+  string capability = 1;
+
+  // The request payload, encoded as JSON.
+  //
+  // Opaque bytes rather than a typed message, because the kernel cannot know the
+  // shape of a contract defined by a module it has never seen. A typed field
+  // here would mean every module's schema has to be compiled into the kernel,
+  // which is the per-module hand-writing this replaces.
+  //
+  // The cost is real and worth stating: gRPC's schema checking stops at this
+  // boundary. A module wanting generated clients with per-field validation
+  // should publish its own proto alongside — that option is unaffected by this
+  // service existing.
+  bytes payload = 2;
+}
+
+// CallResponse carries a capability's result.
+message CallResponse {
+  // The response payload, encoded as JSON, in the same terms as the request.
+  bytes payload = 1;
+}
+
+// ListRequest asks which capabilities are callable from outside the process.
+message ListRequest {}
+
+// CapabilityRef identifies one capability.
+message CapabilityRef {
+  string name = 1;
+  string version = 2;
+}
+
+// ListResponse enumerates externally callable capabilities.
+message ListResponse {
+  // Only capabilities a module explicitly exposed. Registration is not
+  // publication: a module registers so other modules may call it, and that must
+  // not also put it on the network. Listing everything registered would tell a
+  // caller exactly which modules a deployment runs.
+  repeated CapabilityRef capabilities = 1;
+}
+
+// Capabilities dispatches any exposed capability by reference.
+//
+// Tenant and caller identity come from the request's bearer token, never from
+// the payload. An external caller does not assert its own tenant, which is what
+// keeps this from being a cross-tenant read with extra steps. See ADR 0005.
+service Capabilities {
+  // Call invokes one capability and returns its result.
+  rpc Call(CallRequest) returns (CallResponse);
+
+  // List returns the capabilities callable from outside the process.
+  rpc List(ListRequest) returns (ListResponse);
+}

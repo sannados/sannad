@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package sannad.crm.v1;
+
+option go_package = "github.com/sannados/sannad/contracts/gen/go/sannad/crm/v1;crmV1";
+
+// ContactsListedEvent is published to the NATS subject
+// "sannad.crm.contacts.listed" after a successful ListContacts call.
+message ContactsListedEvent {
+  // tenant_id is the tenant whose contacts were listed.
+  string tenant_id = 1;
+  // count is the number of contacts returned in the listing.
+  int32 count = 2;
+  // subject is the identity ID of the caller who triggered the listing.
+  string subject = 3;
+}

@@ -1,0 +1,123 @@
+services:
+  # No default password. `${POSTGRES_PASSWORD:?...}` fails the whole compose
+  # up with a clear message rather than silently starting a database anyone
+  # on the same host or network can guess the credentials for — the previous
+  # hardcoded "sannad"/"sannad" was fine for a throwaway local demo and
+  # nothing beyond it. sslmode=disable in the app services below is safe
+  # specifically because this traffic never leaves the compose network's
+  # private bridge; connecting to any Postgres outside this file (a managed
+  # service, a different host) must use sslmode=require instead.
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-sannad}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/docker-compose/.env}"
+      POSTGRES_DB: "${POSTGRES_DB:-sannad}"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sannad}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Nightly logical backup — the self-hosted fallback documented in
+  # docs/operations/backup-and-dr.md, not a substitute for point-in-time
+  # recovery. A managed Postgres with PITR is the primary recommendation for
+  # anything with a real recovery-time requirement; this exists for
+  # deployments that are, like this compose file itself, self-hosted.
+  postgres-backup:
+    image: postgres:16
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        while true; do
+          sh /scripts/backup.sh
+          sleep 86400
+        done
+    environment:
+      PGHOST: postgres
+      PGUSER: "${POSTGRES_USER:-sannad}"
+      PGPASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/docker-compose/.env}"
+      PGDATABASE: "${POSTGRES_DB:-sannad}"
+      BACKUP_DIR: /backups
+      RETENTION_DAYS: "${BACKUP_RETENTION_DAYS:-14}"
+    volumes:
+      - ../backup/backup.sh:/scripts/backup.sh:ro
+      - postgres-backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  kernel:
+    build:
+      context: ../../
+      dockerfile: deploy/Dockerfile
+      args:
+        BINARY: sannad-kernel
+    environment:
+      SANNAD_ENV: production
+      SANNAD_KERNEL_ADDR: ":8081"
+      SANNAD_DATABASE_DSN: "postgres://${POSTGRES_USER:-sannad}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/docker-compose/.env}@postgres:5432/${POSTGRES_DB:-sannad}?sslmode=disable"
+      SANNAD_SESSION_SECRET: "${SANNAD_SESSION_SECRET:?set SANNAD_SESSION_SECRET in deploy/docker-compose/.env}"
+      # See docs/operations/backup-and-dr.md for the rotation procedure this
+      # feeds: move the retiring secret here when setting a new
+      # SANNAD_SESSION_SECRET, then drop it once enough time has passed that
+      # no token signed under it can still be unexpired. Empty is fine —
+      # nothing to rotate away from yet.
+      SANNAD_SESSION_SECRET_PREVIOUS: "${SANNAD_SESSION_SECRET_PREVIOUS:-}"
+      SANNAD_KAYAN_ISSUER: "http://gateway:8080"
+      SANNAD_NATS_URL: "nats://nats:4222"
+      SANNAD_GRPC_ADDR: ":9090"
+      SANNAD_OTEL_ENDPOINT: "${SANNAD_OTEL_ENDPOINT:-}"
+    ports:
+      - "8081:8081"
+      - "9090:9090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ../../
+      dockerfile: deploy/Dockerfile
+      args:
+        BINARY: sannad-gateway
+    environment:
+      SANNAD_ENV: production
+      SANNAD_GATEWAY_ADDR: ":8080"
+      SANNAD_DATABASE_DSN: "postgres://${POSTGRES_USER:-sannad}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/docker-compose/.env}@postgres:5432/${POSTGRES_DB:-sannad}?sslmode=disable"
+      SANNAD_SESSION_SECRET: "${SANNAD_SESSION_SECRET:?set SANNAD_SESSION_SECRET in deploy/docker-compose/.env}"
+      SANNAD_SESSION_SECRET_PREVIOUS: "${SANNAD_SESSION_SECRET_PREVIOUS:-}"
+      SANNAD_KAYAN_ISSUER: "http://gateway:8080"
+      SANNAD_CORS_ORIGINS: "${SANNAD_CORS_ORIGINS:-*}"
+      SANNAD_RATE_LIMIT: "${SANNAD_RATE_LIMIT:-60}"
+      SANNAD_RATE_LIMIT_PER_TENANT: "${SANNAD_RATE_LIMIT_PER_TENANT:-300}"
+      SANNAD_NATS_URL: "nats://nats:4222"
+      SANNAD_OTEL_ENDPOINT: "${SANNAD_OTEL_ENDPOINT:-}"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  postgres-backups:

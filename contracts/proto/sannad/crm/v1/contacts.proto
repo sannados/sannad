@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package sannad.crm.v1;
+
+option go_package = "github.com/sannados/sannad/contracts/gen/go/sannad/crm/v1;crmV1";
+
+message ListContactsRequest {
+  string tenant_id = 1;
+}
+
+message Contact {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string email = 4;
+}
+
+message ListContactsResponse {
+  repeated Contact contacts = 1;
+}
+
+service ContactReader {
+  rpc ListContacts(ListContactsRequest) returns (ListContactsResponse);
+}
